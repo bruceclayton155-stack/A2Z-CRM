@@ -10,7 +10,20 @@ let pendingOutcome = null, pendingCallbackLead = null;
 let parsedUpload = null;
 
 const $ = (id) => document.getElementById(id);
-const NOW = () => new Date().toISOString();
+/* Trusted clock: the PC clock can be wrong (dead CMOS battery), so time comes from the Supabase server.
+   clockOffset = server time minus PC time; falls back to the PC clock if the server can't be reached. */
+let clockOffset = 0, clockTimer = null;
+const nowDate = () => new Date(Date.now() + clockOffset);
+const NOW = () => nowDate().toISOString();
+async function syncClock() {
+  try {
+    const t0 = Date.now();
+    const { data, error } = await sb.rpc("server_time");
+    const t1 = Date.now();
+    if (error || !data) return;
+    clockOffset = new Date(data).getTime() - (t0 + t1) / 2;
+  } catch (e) { /* keep last known offset */ }
+}
 
 /* ---------- helpers ---------- */
 function slug(name) {
@@ -43,14 +56,14 @@ function toast(el, msg) { $(el).textContent = msg; setTimeout(() => { $(el).text
 
 /* Pakistan/Karachi + lead-local time helpers */
 function timeIn(tz) {
-  return new Intl.DateTimeFormat("en-US", { timeZone: tz || "Asia/Karachi", hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date());
+  return new Intl.DateTimeFormat("en-US", { timeZone: tz || "Asia/Karachi", hour: "2-digit", minute: "2-digit", hour12: true }).format(nowDate());
 }
 function localHour(tz) {
-  return +new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).format(new Date()) % 24;
+  return +new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).format(nowDate()) % 24;
 }
 /* today at 5 AM Pakistan time == 00:00 UTC */
 function pktDayStartISO() {
-  const d = new Date();
+  const d = nowDate();
   d.setUTCHours(0, 0, 0, 0);
   return d.toISOString();
 }
@@ -187,6 +200,8 @@ async function boot() {
     showView("view-login");
     return;
   }
+  await syncClock();
+  if (!clockTimer) clockTimer = setInterval(syncClock, 10 * 60 * 1000);
   if (prof.is_admin) initAdmin(); else initAgent();
 }
 
@@ -337,7 +352,7 @@ function showOutcomePanel() {
 async function saveOutcome() {
   if (!currentLead || !pendingOutcome) { $("outcome-error").textContent = "Pick an outcome first."; return; }
   const lead = currentLead;
-  const now = new Date();
+  const now = nowDate();
   const patch = { last_called_at: NOW() };
   let noteExtra = "";
   switch (pendingOutcome) {
@@ -821,7 +836,7 @@ async function exportCsv(table) {
     cols.map((c) => `"${String(r[c] ?? "").replace(/"/g, '""')}"`).join(","))).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-  a.download = `${table}-backup-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `${table}-backup-${nowDate().toISOString().slice(0, 10)}.csv`;
   a.click();
   toast("backup-msg", `Exported ${rows.length} rows.`);
 }
