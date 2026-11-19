@@ -142,59 +142,42 @@ function txFlush(tap, force) {
   w.postMessage({ type: "audio", id: ++TX.seq, speaker: tap.speaker, t: Date.now(), runId: TX.runId, audio: all }, [all.buffer]);
 }
 
-/* ---- customer audio source: a browser TAB (never the whole system) or a virtual audio device ---- */
-const TX_SRC_KEY = "a2z_tx_src";
-async function txFillSources(askPermission) {
-  const sel = $("tx-src");
-  if (!sel || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-  let devs = await navigator.mediaDevices.enumerateDevices();
-  if (askPermission && devs.some((d) => d.kind === "audioinput" && !d.label)) {
-    try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach((t) => t.stop()); devs = await navigator.mediaDevices.enumerateDevices(); } catch (e) {}
-  }
-  const saved = localStorage.getItem(TX_SRC_KEY) || "tab";
-  sel.innerHTML = '<option value="tab">Customer voice: one browser tab</option>' +
-    devs.filter((d) => d.kind === "audioinput" && d.deviceId && !["default", "communications"].includes(d.deviceId))
-      .map((d) => `<option value="${esc(d.deviceId)}">Customer voice: ${esc(d.label || "audio input")}</option>`).join("");
-  sel.value = [...sel.options].some((o) => o.value === saved) ? saved : "tab";
-}
-
 /* ---- start / stop capture (once per shift) ---- */
-async function txStart() {
+async function txStart(auto) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.Worker) {
     txSetStatus("This browser can't do it. Use Chrome or Edge on Windows."); return;
   }
-  const src = ($("tx-src") && $("tx-src").value) || "tab";
-  localStorage.setItem(TX_SRC_KEY, src);
   const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
   try {
     TX.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    if (src === "tab") {
-      txSetStatus("Pick the TAB where the call audio plays, tick “Also share tab audio”, click Share.");
-      TX.disp = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 1 }, audio: raw,
-        selfBrowserSurface: "exclude", systemAudio: "exclude", monitorTypeSurfaces: "exclude", surfaceSwitching: "exclude",
-      });
-      const vt = TX.disp.getVideoTracks()[0];
-      const surface = vt && vt.getSettings ? vt.getSettings().displaySurface : "browser";
-      if (surface && surface !== "browser") {
-        txStop(true); txSetStatus("That was not a browser tab (it would capture all sounds). Click again and choose a TAB."); return;
-      }
-      if (!TX.disp.getAudioTracks().length) {
-        txStop(true); txSetStatus("No tab audio shared. Click again and tick “Also share tab audio”."); return;
-      }
+    const want = (CONFIG.customerDeviceLabel || "").toLowerCase();      // optional: virtual cable name, skips screen share
+    let dev = null;
+    if (want) dev = (await navigator.mediaDevices.enumerateDevices()).find((d) => d.kind === "audioinput" && d.label.toLowerCase().includes(want));
+    if (auto && !dev) { txStop(true); txSetStatus("Auto transcript: virtual audio device \"" + CONFIG.customerDeviceLabel + "\" not found. Check the cable is installed, then click Start."); return; }
+    if (dev) {
+      TX.disp = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: dev.deviceId }, ...raw } });
     } else {
-      TX.disp = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: src }, ...raw } });
+      txSetStatus("In the share window pick the call app (or its tab) and tick “Share audio”, then click Share.");
+      TX.disp = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 1 }, audio: raw, selfBrowserSurface: "exclude", systemAudio: "include",
+      });
+      if (!TX.disp.getAudioTracks().length) {
+        txStop(true); txSetStatus("No audio was shared. Click again, choose the call app and tick “Share audio”."); return;
+      }
+      const vt = TX.disp.getVideoTracks()[0];
+      const surface = vt && vt.getSettings ? vt.getSettings().displaySurface : "";
+      if (surface === "monitor") txSetStatus("● Entire screen shared: ALL system sounds will be transcribed. Share only the call app/tab to avoid that.");
     }
   } catch (e) {
     txStop(true); txSetStatus("Not started: " + (e.name === "NotAllowedError" ? "permission was declined." : e.message)); return;
   }
-  TX.disp.getTracks().forEach((t) => t.addEventListener("ended", () => txStop(false)));
+  TX.auto = !!(auto || CONFIG.customerDeviceLabel);
+  TX.disp.getTracks().forEach((t) => t.addEventListener("ended", () => { txStop(false); txAutoRetry(); }));
   txEnsureWorkers();
   TX.taps = [txMakeTap(TX.mic, "Agent"), txMakeTap(TX.disp, "Customer")];
   TX.on = true;
   $("btn-tx").textContent = "Stop live transcript";
-  if ($("tx-src")) $("tx-src").disabled = true;
-  txLoadStatus();
+  if (!/Entire screen/.test(($("tx-status")||{}).textContent || "")) txLoadStatus();
   if (callStart && currentLead) txBeginCall(currentLead);     // started mid-call
 }
 function txStop(silent) {
@@ -205,13 +188,15 @@ function txStop(silent) {
   [TX.mic, TX.disp].forEach((s) => s && s.getTracks().forEach((t) => t.stop()));
   TX.mic = TX.disp = null;
   const b = $("btn-tx"); if (b) b.textContent = "Start live transcript";
-  const s = $("tx-src"); if (s) s.disabled = false;
   if (!silent) txSetStatus("Transcript stopped.");
 }
+function txAutoRetry() {                      // if the device drops, try to reconnect quietly
+  if (!TX.auto || TX.retry) return;
+  TX.retry = setTimeout(() => { TX.retry = null; if (!TX.on) txStart(true); }, 8000);
+}
 function txInit() {
-  $("btn-tx").addEventListener("click", () => (TX.on ? txStop(false) : txStart()));
-  const sel = $("tx-src");
-  if (sel) { txFillSources(false); sel.addEventListener("focus", () => { if (!TX.on) txFillSources(true); }); }
+  $("btn-tx").addEventListener("click", () => { TX.auto = false; TX.on ? txStop(false) : txStart(); });
+  if (CONFIG.customerDeviceLabel) txStart(true);      // permanent mode: starts by itself, no share window
 }
 
 /* ---- per-call hooks (called from app.js) ---- */
@@ -220,6 +205,7 @@ function txBeginCall(lead) {
   $("tx-summary").classList.add("hidden"); $("tx-summary").textContent = "";
   if (!TX.on) { $("tx-live").classList.add("hidden"); return; }
   TX.recording = true;
+  TX.taps.forEach((t) => { if (t.ctx.state === "suspended") t.ctx.resume(); });   // browsers pause audio until a click
   $("tx-live").classList.remove("hidden");
   txRenderLive();
 }
