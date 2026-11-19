@@ -444,6 +444,8 @@ async function initAdmin() {
   $("btn-export-leads").addEventListener("click", () => exportCsv("leads"));
   $("btn-export-calls").addEventListener("click", () => exportCsv("calls"));
   $("btn-add-agent").addEventListener("click", createAgent);
+  $("btn-balance").addEventListener("click", async () => { const n = await rebalanceUnused(); toast("agents-msg", `Balanced: moved ${n} unused lead(s).`); loadAgents(); });
+  $("btn-reset-all").addEventListener("click", () => resetLeads(null));
   loadAgents();
   loadTodayStats();
 }
@@ -460,6 +462,8 @@ async function createAgent() {
   if (error) { toast("agents-msg", /already|Database error/i.test(error.message) ? "That name is already taken (or the database blocked it)." : error.message); return; }
   $("new-agent-name").value = ""; $("new-agent-pass").value = "";
   toast("agents-msg", `Agent created. Login name: ${slug(name)} / Password: ${pass} — share these with them.`);
+  const n = await rebalanceUnused();
+  if (n) toast("agents-msg", `Agent created and given ${n} unused lead(s). Login name: ${slug(name)} / Password: ${pass}`);
   loadAgents();
 }
 
@@ -473,110 +477,91 @@ async function loadAgents() {
     <td><b>${esc(a.name)}</b></td>
     ${["is_admin", "is_present", "can_website", "can_dm", "active"].map((f) =>
       `<td><input type="checkbox" data-field="${f}" ${a[f] ? "checked" : ""}></td>`).join("")}
-    <td><button class="btn sm" data-redistrib="${a.id}">Redistribute open leads</button></td>
+    <td><button class="btn sm" data-redistrib="${a.id}">Redistribute open leads</button> <button class="btn sm danger" data-reset="${a.id}">Reset leads</button></td>
   </tr>`).join("");
   tb.querySelectorAll("input[type=checkbox]").forEach((c) => c.addEventListener("change", async () => {
     const id = c.closest("tr").dataset.id;
     const { error } = await sb.from("profiles").update({ [c.dataset.field]: c.checked }).eq("id", id);
     if (error) { c.checked = !c.checked; toast("agents-msg", error.message); }
-    else toast("agents-msg", "Saved.");
+    else {
+      const n = await rebalanceUnused();
+      toast("agents-msg", n ? `Saved. Balanced ${n} unused lead(s) across present agents.` : "Saved.");
+    }
   }));
+  tb.querySelectorAll("[data-reset]").forEach((b) => b.addEventListener("click", () => resetLeads(b.dataset.reset)));
   tb.querySelectorAll("[data-redistrib]").forEach((b) => b.addEventListener("click", () => redistribute(b.dataset.redistrib)));
 }
 async function presentAgentsFor(tab) {
   const { data } = await sb.from("profiles").select("*")
-    .eq("is_present", true).eq("active", true).eq(tab === "website" ? "can_website" : "can_dm", true);
+    .eq("is_admin", false).eq("is_present", true).eq("active", true).eq(tab === "website" ? "can_website" : "can_dm", true);
   return data || [];
+}
+async function fetchAll(build) {            // pages past Supabase's 1000-row limit
+  let all = [], from = 0;
+  for (;;) {
+    const { data, error } = await build().range(from, from + 999);
+    if (error || !data) break;
+    all = all.concat(data);
+    if (data.length < 1000) break;
+    from += 1000;
+  }
+  return all;
+}
+async function moveLeads(ids, agentId) {
+  for (let i = 0; i < ids.length; i += 150) {
+    const { error } = await sb.from("leads").update({ assigned_to: agentId }).in("id", ids.slice(i, i + 150));
+    if (error) return false;
+  }
+  return true;
+}
+/* Even out UNUSED leads (status new, never called) among present non-admin agents.
+   Takes from admin/absent/inactive owners and from agents above their share. */
+async function rebalanceUnused() {
+  let moved = 0;
+  for (const tab of ["dm", "website"]) {
+    const agents = await presentAgentsFor(tab);
+    if (!agents.length) continue;
+    const leads = await fetchAll(() => sb.from("leads").select("id,assigned_to").eq("tab", tab).eq("status", "new").eq("attempts", 0).order("id"));
+    const base = Math.floor(leads.length / agents.length);
+    let extra = leads.length % agents.length;
+    const target = {}, have = {}, pool = [];
+    agents.forEach((a) => { target[a.id] = base + (extra-- > 0 ? 1 : 0); have[a.id] = []; });
+    for (const l of leads) { if (have[l.assigned_to]) have[l.assigned_to].push(l.id); else pool.push(l.id); }
+    for (const a of agents) { const sur = have[a.id].length - target[a.id]; if (sur > 0) pool.push(...have[a.id].splice(0, sur)); }
+    for (const a of agents) {
+      const need = target[a.id] - have[a.id].length;
+      if (need > 0) { const take = pool.splice(0, need); if (take.length && await moveLeads(take, a.id)) moved += take.length; }
+    }
+  }
+  return moved;
 }
 async function redistribute(fromId) {
   const from = agentsCache.find((a) => a.id === fromId);
   if (!from) return;
-  const { data: leads } = await sb.from("leads").select("*")
-    .eq("assigned_to", fromId).in("status", ["new", "voicemail"]);
-  if (!leads || !leads.length) { toast("agents-msg", `${from.name} has no open leads.`); return; }
-  const targets = [];
-  for (const l of leads) {
-    const pool = await presentAgentsFor(l.tab);
-    const others = pool.filter((p) => p.id !== fromId);
-    const use = others.length ? others : pool;
-    if (!use.length) { toast("agents-msg", "No present agents available for some tabs."); continue; }
-    targets.push({ lead: l, agent: use[targets.length % use.length] });
-  }
+  const leads = await fetchAll(() => sb.from("leads").select("id,tab").eq("assigned_to", fromId).in("status", ["new", "voicemail"]).order("id"));
+  if (!leads.length) { toast("agents-msg", `${from.name} has no open leads.`); return; }
   let moved = 0;
-  for (const t of targets) {
-    const { error } = await sb.from("leads").update({ assigned_to: t.agent.id }).eq("id", t.lead.id);
-    if (!error) moved++;
+  for (const tab of ["dm", "website"]) {
+    const ids = leads.filter((l) => l.tab === tab).map((l) => l.id);
+    const others = (await presentAgentsFor(tab)).filter((p) => p.id !== fromId);
+    if (!ids.length || !others.length) continue;
+    for (let k = 0; k < others.length; k++) {
+      const part = ids.filter((_, i) => i % others.length === k);
+      if (part.length && await moveLeads(part, others[k].id)) moved += part.length;
+    }
   }
   toast("agents-msg", `Moved ${moved} of ${leads.length} open lead(s) from ${from.name}. Callbacks stay with ${from.name} — move them in the Callbacks tab if needed.`);
 }
-
-/* ---- upload ---- */
-function cleanPhone(p) {
-  const digits = String(p || "").replace(/\D/g, "");
-  if (digits.length === 11 && digits[0] === "1") return "+1 " + digits.slice(1, 4) + "-" + digits.slice(4, 7) + "-" + digits.slice(7);
-  if (digits.length === 10) return "+1 " + digits.slice(0, 3) + "-" + digits.slice(3, 6) + "-" + digits.slice(6);
-  return null;
-}
-function normNiche(n) {
-  n = String(n || "").trim();
-  if (/^roofers?$/i.test(n)) return "Roofing";
-  return n;
-}
-async function parseUploadFile() {
-  const f = $("up-file").files[0];
-  $("up-preview").classList.add("hidden"); $("up-done").textContent = ""; $("up-error").textContent = "";
-  if (!f) return;
-  let wb;
-  try { wb = XLSX.read(await f.arrayBuffer(), { type: "array" }); }
-  catch (e) { $("up-error").textContent = "Could not read that file. Use the .xlsx export from your scraper."; return; }
-  // find the sheet for the selected tab; ignore "Running Google Ads"
-  const wanted = $("up-tab").value === "website" ? "website" : "digital";
-  let sheetName = wb.SheetNames.find((n) => n.toLowerCase().includes(wanted)) ||
-    wb.SheetNames.find((n) => !n.toLowerCase().includes("running google"));
-  if (!sheetName) { $("up-error").textContent = "No usable sheet found in the file."; return; }
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
-  const seen = new Set(), valid = [];
-  let noPhone = 0, dupFile = 0;
-  for (const r of rows) {
-    const phone = cleanPhone(r["Phone"]);
-    if (!phone) { noPhone++; continue; }
-    if (seen.has(phone)) { dupFile++; continue; }
-    seen.add(phone);
-    valid.push({
-      tab: $("up-tab").value,
-      business_name: String(r["Business Name"] || "").trim() || "Unknown",
-      phone,
-      city: String(r["City"] || "").trim(),
-      rating: r["Rating"] !== "" ? +r["Rating"] : null,
-      reviews: r["Reviews"] !== "" ? +r["Reviews"] : null,
-      niche: normNiche(r["Niche"]),
-      website: r["Domain"] ? String(r["Domain"]).trim() : null,
-      email: r["Email"] ? String(r["Email"]).trim() : null,
-      meta_ads: r["Meta Ads"] ? String(r["Meta Ads"]).trim() : null,
-      notes: r["Notes"] ? String(r["Notes"]).trim().slice(0, 500) : null,
-      timezone: tzFor(phone, r["City"]),
-    });
-  }
-  // duplicates against DB
-  const { data: existing } = await sb.from("leads").select("phone");
-  const have = new Set((existing || []).map((x) => x.phone));
-  const fresh = valid.filter((l) => !have.has(l.phone));
-  const dupDb = valid.length - fresh.length;
-  const agents = await presentAgentsFor($("up-tab").value);
-  parsedUpload = { rows: fresh, filename: f.name, sheet: sheetName };
-  $("up-preview").classList.remove("hidden");
-  $("up-stats").innerHTML = [
-    [`Sheet used`, `"${sheetName}"`],
-    [`Rows in sheet`, rows.length],
-    [`Skipped — no usable phone`, noPhone],
-    [`Skipped — duplicate in file`, dupFile],
-    [`Skipped — already in CRM`, dupDb],
-    [`<b>Ready to upload</b>`, `<b>${fresh.length}</b>`],
-  ].map(([k, v]) => `<li><span>${k}</span><span>${v}</span></li>`).join("");
-  $("up-agents").textContent = agents.length
-    ? agents.map((a) => a.name).join(", ")
-    : "NOBODY — no present agents with access to this tab. Fix that in the Agents tab first.";
-  $("btn-upload").disabled = !agents.length || !fresh.length;
+/* Reset today's worked leads (since 5 AM PKT) back to "new". agentId null = everyone.
+   Meetings, interested, DNC and wrong numbers are never reset. */
+async function resetLeads(agentId) {
+  const who = agentId ? (agentsCache.find((a) => a.id === agentId)?.name || "agent") : "ALL agents";
+  if (!confirm(`Reset today's worked leads for ${who}? They go back to "new" and can be called again.`)) return;
+  let q = sb.from("leads").update({ status: "new", attempts: 0, next_call_at: NOW(), callback_at: null }, { count: "exact" })
+    .gte("last_called_at", pktDayStartISO()).in("status", ["voicemail", "no_answer", "callback", "not_interested"]);
+  if (agentId) q = q.eq("assigned_to", agentId);
+  const { count, error } = await q;
+  toast("agents-msg", error ? error.message : `Reset ${count || 0} lead(s) for ${who}.`);
 }
 async function commitUpload() {
   if (!parsedUpload) return;
