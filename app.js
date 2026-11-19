@@ -162,32 +162,6 @@ async function doLogin() {
   session = data.session;
   await boot();
 }
-async function doSignup() {
-  const name = $("login-name").value.trim(), pass = $("signup-pass").value;
-  const code = $("signup-code").value.trim();
-  $("login-error").textContent = "";
-  if (!name) { $("login-error").textContent = "Enter a name first."; return; }
-  if (pass.length < 6) { $("login-error").textContent = "Password must be at least 6 characters."; return; }
-  let res;
-  try {
-    res = await sb.auth.signUp({ email: emailFor(name), password: pass, options: { data: { name, signup_code: code } } });
-  } catch (e) {
-    $("login-error").textContent = "Cannot reach the server (" + (e.message || e) + "). Check internet / project status — see troubleshooting.";
-    return;
-  }
-  const { data, error } = res;
-  if (error) {
-    const m = error.message || "";
-    $("login-error").textContent = /signup code/i.test(m) ? "Wrong or missing signup code (or signups are closed)."
-      : /Database error/i.test(m) ? "Signup blocked by the database (" + m + "). Re-run crm-full-setup.sql in Supabase, or check the signup code."
-      : /Failed to fetch|NetworkError/i.test(m) ? "Cannot reach the server. Check internet / project status."
-      : m;
-    return;
-  }
-  if (!data.session) { $("login-error").textContent = "Account created but sign-in blocked. Ask admin to disable 'Confirm email' in Supabase Auth settings."; return; }
-  session = data.session;
-  await boot();
-}
 async function doLogout() {
   clearInterval(pollInt); clearInterval(timerInt);
   await sb.auth.signOut();
@@ -469,24 +443,29 @@ async function initAdmin() {
   $("btn-del-filtered").addEventListener("click", deleteFiltered);
   $("btn-export-leads").addEventListener("click", () => exportCsv("leads"));
   $("btn-export-calls").addEventListener("click", () => exportCsv("calls"));
-  $("btn-save-code").addEventListener("click", () => saveSignupCode($("signup-code-admin").value.trim()));
-  $("btn-close-signups").addEventListener("click", () => { $("signup-code-admin").value = ""; saveSignupCode(""); });
+  $("btn-add-agent").addEventListener("click", createAgent);
   loadAgents();
   loadTodayStats();
 }
-async function saveSignupCode(code) {
-  const { error } = await sb.from("app_settings").upsert({ key: "signup_code", value: code });
-  toast("agents-msg", error ? error.message : (code ? "Signup code saved." : "Signups are now closed."));
-}
-async function loadSignupCode() {
-  const { data } = await sb.from("app_settings").select("value").eq("key", "signup_code").maybeSingle();
-  $("signup-code-admin").value = data?.value || "";
+async function createAgent() {
+  const name = $("new-agent-name").value.trim(), pass = $("new-agent-pass").value;
+  if (!name || pass.length < 6) { toast("agents-msg", "Enter a name and a password of at least 6 characters."); return; }
+  // one-time internal code so the database allows exactly this signup, then closed again
+  const code = "tmp-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const { error: e1 } = await sb.from("app_settings").upsert({ key: "signup_code", value: code });
+  if (e1) { toast("agents-msg", e1.message); return; }
+  const tmp = supabase.createClient(CONFIG.url, CONFIG.key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+  const { error } = await tmp.auth.signUp({ email: emailFor(name), password: pass, options: { data: { name, signup_code: code } } });
+  await sb.from("app_settings").upsert({ key: "signup_code", value: "" });
+  if (error) { toast("agents-msg", /already|Database error/i.test(error.message) ? "That name is already taken (or the database blocked it)." : error.message); return; }
+  $("new-agent-name").value = ""; $("new-agent-pass").value = "";
+  toast("agents-msg", `Agent created. Login name: ${slug(name)} / Password: ${pass} — share these with them.`);
+  loadAgents();
 }
 
 /* ---- agents ---- */
 let agentsCache = [];
 async function loadAgents() {
-  loadSignupCode();
   const { data } = await sb.from("profiles").select("*").order("name");
   agentsCache = data || [];
   const tb = $("agents-tbl").querySelector("tbody");
@@ -760,7 +739,5 @@ async function exportCsv(table) {
 /* ---------- init ---------- */
 $("btn-login").addEventListener("click", doLogin);
 $("login-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
-$("btn-show-signup").addEventListener("click", () => $("signup-box").classList.toggle("hidden"));
-$("btn-signup").addEventListener("click", doSignup);
 $("up-tab").addEventListener("change", parseUploadFile);
 boot();
