@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A2Z Marketing Solutionz — CRM</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<section id="view-login" class="view hidden">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="brand">A2Z <span>Marketing Solutionz</span></div>
+      <p class="muted" id="login-sub">Agent &amp; Admin CRM</p>
+      <label>Name</label>
+      <input id="login-name" type="text" autocomplete="username" placeholder="e.g. ali">
+      <label>Password</label>
+      <input id="login-pass" type="password" autocomplete="current-password" placeholder="••••••••">
+      <button id="btn-login" class="btn primary block">Sign in</button>
+      <button id="btn-show-signup" class="btn ghost block">New here? Create an account</button>
+      <div id="signup-box" class="hidden">
+        <p class="hint">Account name must be unique. The first account ever created becomes the admin automatically.</p>
+        <label>New password (min 6 characters)</label>
+        <input id="signup-pass" type="password" placeholder="choose a password">
+        <button id="btn-signup" class="btn primary block">Create account</button>
+      </div>
+      <p id="login-error" class="error"></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ AGENT ============ -->
+<section id="view-agent" class="view hidden">
+  <header class="topbar">
+    <div class="brand small">A2Z <span>CRM</span></div>
+    <nav id="agent-tabs" class="tabs"></nav>
+    <div class="clocks">
+      <div class="clock"><label>Pakistan</label><b id="clock-pk">--:--</b></div>
+      <div class="clock" id="clock-local-wrap"><label id="clock-local-label">Lead local</label><b id="clock-local">--:--</b></div>
+    </div>
+    <div class="who"><span id="agent-name"></span><button id="btn-logout" class="btn ghost sm">Log out</button></div>
+  </header>
+
+  <div id="callback-banner" class="banner hidden">
+    <b>Callback due now</b> — <span id="callback-banner-name"></span> finish this lead to receive it.
+    <button id="callback-banner-take" class="btn primary sm">Take it now</button>
+  </div>
+
+  <main class="agent-main">
+    <div id="lead-empty" class="empty hidden">
+      <h2 id="empty-title">No leads right now</h2>
+      <p id="empty-msg" class="muted"></p>
+      <button id="btn-show-anyway" class="btn ghost hidden">Call next lead anyway</button>
+      <button id="btn-refresh-queue" class="btn primary">Check again</button>
+    </div>
+
+    <div id="lead-card" class="lead-card hidden">
+      <div class="lead-head">
+        <div>
+          <h1 id="ld-name">—</h1>
+          <div class="chips">
+            <span class="chip" id="ld-city">—</span>
+            <span class="chip" id="ld-niche">—</span>
+            <span class="chip" id="ld-rating">—</span>
+            <span class="chip" id="ld-meta">—</span>
+          </div>
+        </div>
+        <div id="goodtime-badge" class="badge">—</div>
+      </div>
+
+      <a id="ld-phone" class="phone" href="#">—</a>
+
+      <div class="lead-actions">
+        <button id="btn-call" class="btn call">Call — start timer</button>
+        <button id="btn-copy" class="btn ghost">Copy number</button>
+      </div>
+
+      <div id="timer-row" class="timer-row hidden">On call: <b id="call-timer">00:00</b>
+        <button id="btn-hangup" class="btn sm">End call &amp; set outcome</button>
+      </div>
+
+      <div class="lead-meta muted">
+        <span id="ld-website-wrap" class="hidden">Website: <a id="ld-website" href="#" target="_blank" rel="noopener"></a></span>
+        <span id="ld-email-wrap" class="hidden">Email: <span id="ld-email"></span></span>
+        <span id="ld-attempts"></span>
+      </div>
+      <p id="ld-notes" class="notes"></p>
+      <div id="ld-history"></div>
+
+      <div id="outcome-panel" class="outcome hidden">
+        <h3>Outcome</h3>
+        <div id="outcome-btns" class="outcome-btns"></div>
+        <div id="callback-when" class="hidden">
+          <label>Callback date &amp; time (lead's local time)</label>
+          <input id="cb-datetime" type="datetime-local">
+        </div>
+        <label>Note (optional)</label>
+        <textarea id="call-note" rows="2" placeholder="Quick summary…"></textarea>
+        <div class="row-end">
+          <button id="btn-save-outcome" class="btn primary">Save &amp; next lead</button>
+        </div>
+        <p id="outcome-error" class="error"></p>
+      </div>
+    </div>
+
+    <aside class="today-box">
+      <h3>Today (since 5 AM PKT)</h3>
+      <div id="agent-today-stats">—</div>
+    </aside>
+  </main>
+</section>
+
+<!-- ============ ADMIN ============ -->
+<section id="view-admin" class="view hidden">
+  <header class="topbar">
+    <div class="brand small">A2Z <span>Admin</span></div>
+    <nav class="tabs" id="admin-tabs">
+      <button data-atab="upload" class="atab active">Upload</button>
+      <button data-atab="agents" class="atab">Agents</button>
+      <button data-atab="today" class="atab">Today</button>
+      <button data-atab="leads" class="atab">Leads</button>
+      <button data-atab="callbacks" class="atab">Callbacks</button>
+      <button data-atab="meetings" class="atab">Meetings</button>
+      <button data-atab="backup" class="atab">Backup</button>
+    </nav>
+    <div class="who"><span id="admin-name"></span><button id="btn-logout2" class="btn ghost sm">Log out</button></div>
+  </header>
+
+  <main class="admin-main">
+    <!-- Upload -->
+    <div class="apane" id="apane-upload">
+      <h2>Upload leads (Excel)</h2>
+      <p class="muted">Pick the file. Website Leads and Digital Marketing Leads tabs are recognised automatically; the "Running Google Ads" tab is ignored.</p>
+      <input id="up-file" type="file" accept=".xlsx,.xls">
+      <div class="row">
+        <label>Assign to tab:</label>
+        <select id="up-tab">
+          <option value="dm">Digital Marketing</option>
+          <option value="website">Website</option>
+        </select>
+      </div>
+      <div id="up-preview" class="hidden">
+        <h3>Preview</h3>
+        <ul class="stats-list" id="up-stats"></ul>
+        <p class="hint">Assignment: even split, round-robin, among <b id="up-agents"></b>.</p>
+        <button id="btn-upload" class="btn primary">Upload &amp; assign</button>
+        <p id="up-error" class="error"></p>
+        <p id="up-done" class="ok"></p>
+      </div>
+    </div>
+
+    <!-- Agents -->
+    <div class="apane hidden" id="apane-agents">
+      <h2>Agents</h2>
+      <p class="muted">Uncheck <b>Present</b> for someone absent, then use "Redistribute" to hand their open leads to present agents. Deactivated accounts cannot log in.</p>
+      <table class="tbl" id="agents-tbl"><thead>
+        <tr><th>Name</th><th>Admin</th><th>Present</th><th>Website tab</th><th>DM tab</th><th>Active</th><th></th></tr>
+      </thead><tbody></tbody></table>
+      <p id="agents-msg" class="ok"></p>
+    </div>
+
+    <!-- Today -->
+    <div class="apane hidden" id="apane-today">
+      <h2>Today (since 5 AM PKT)</h2>
+      <div id="today-stats"></div>
+    </div>
+
+    <!-- Leads -->
+    <div class="apane hidden" id="apane-leads">
+      <h2>All leads</h2>
+      <div class="filters">
+        <select id="f-tab"><option value="">All tabs</option><option value="website">Website</option><option value="dm">DM</option></select>
+        <select id="f-status"><option value="">All statuses</option></select>
+        <select id="f-agent"><option value="">All agents</option></select>
+        <input id="f-city" type="text" placeholder="City contains…">
+        <button id="btn-filter" class="btn primary sm">Filter</button>
+        <button id="btn-del-filtered" class="btn danger sm">Delete filtered (DNC / wrong number)</button>
+      </div>
+      <table class="tbl sm" id="leads-tbl"><thead>
+        <tr><th>Business</th><th>Phone</th><th>City</th><th>Tab</th><th>Status</th><th>Agent</th><th>Attempts</th><th>Actions</th></tr>
+      </thead><tbody></tbody></table>
+      <p id="leads-msg" class="muted"></p>
+    </div>
+
+    <!-- Callbacks -->
+    <div class="apane hidden" id="apane-callbacks">
+      <h2>Callbacks</h2>
+      <table class="tbl" id="callbacks-tbl"><thead>
+        <tr><th>When (lead local)</th><th>Business</th><th>Phone</th><th>Agent</th><th>Move to</th></tr>
+      </thead><tbody></tbody></table>
+      <p id="callbacks-msg" class="muted"></p>
+    </div>
+
+    <!-- Meetings -->
+    <div class="apane hidden" id="apane-meetings">
+      <h2>Meetings booked <span class="muted">(hand to ads manager)</span></h2>
+      <table class="tbl" id="meetings-tbl"><thead>
+        <tr><th>Date</th><th>Business</th><th>Phone</th><th>City</th><th>Agent</th></tr>
+      </thead><tbody></tbody></table>
+      <p id="meetings-msg" class="muted"></p>
+    </div>
+
+    <!-- Backup -->
+    <div class="apane hidden" id="apane-backup">
+      <h2>Backup</h2>
+      <p class="muted">The free Supabase plan has no automatic backups. Export CSVs weekly.</p>
+      <button id="btn-export-leads" class="btn primary">Export all leads (CSV)</button>
+      <button id="btn-export-calls" class="btn ghost">Export all calls (CSV)</button>
+      <p id="backup-msg" class="ok"></p>
+    </div>
+  </main>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
