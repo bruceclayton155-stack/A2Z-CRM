@@ -234,6 +234,7 @@ function initAgent() {
   $("clock-pk").textContent = timeIn("Asia/Karachi");
   $("btn-logout").addEventListener("click", doLogout);
   $("btn-call").addEventListener("click", startCall);
+  if (typeof txInit === "function") txInit();
   $("btn-copy").addEventListener("click", () => {
     if (currentLead) navigator.clipboard.writeText(currentLead.phone).then(() => toast("btn-copy", "ok"));
   });
@@ -261,6 +262,7 @@ function renderLead(lead, isCallback) {
   $("outcome-panel").classList.add("hidden");
   $("timer-row").classList.add("hidden");
   clearInterval(timerInt); callStart = null;
+  if (typeof txReset === "function") txReset();
   $("ld-name").textContent = lead.business_name;
   $("ld-city").textContent = lead.city || "—";
   $("ld-niche").textContent = lead.niche || "—";
@@ -281,6 +283,7 @@ function renderLead(lead, isCallback) {
   $("clock-local-label").textContent = (lead.city || "Lead") + " local";
   $("clock-local").textContent = timeIn(lead.timezone);
   loadLeadHistory(lead.id);
+  if (typeof txRenderPast === "function") txRenderPast(lead.id);
   $("callback-banner").classList.add("hidden");
 }
 
@@ -341,11 +344,13 @@ function startCall() {
     $("call-timer").textContent = fmtDuration(Math.floor((Date.now() - callStart) / 1000));
   }, 1000);
   $("call-timer").textContent = "00:00";
+  if (typeof txBeginCall === "function") txBeginCall(currentLead);
   window.open("tel:" + currentLead.phone.replace(/[^+\d]/g, ""), "_self");
 }
 
 function showOutcomePanel() {
   clearInterval(timerInt);
+  if (typeof txEndCall === "function") txEndCall();
   $("outcome-panel").classList.remove("hidden");
 }
 
@@ -463,6 +468,7 @@ async function initAdmin() {
   $("btn-reset-all").addEventListener("click", () => resetLeads(null));
   loadAgents();
   loadTodayStats();
+  if (typeof adminSummaryInit === "function") adminSummaryInit();
 }
 async function createAgent() {
   const name = $("new-agent-name").value.trim(), pass = $("new-agent-pass").value;

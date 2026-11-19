@@ -74,6 +74,13 @@
         <button id="btn-hangup" class="btn sm">End call &amp; set outcome</button>
       </div>
 
+      <div class="tx-bar">
+        <button id="btn-tx" class="btn ghost sm">Start live transcript</button>
+        <span id="tx-status" class="muted"></span>
+      </div>
+      <div id="tx-live" class="tx-live hidden"></div>
+      <div id="tx-summary" class="tx-summary hidden"></div>
+
       <div class="lead-meta muted">
         <span id="ld-website-wrap" class="hidden">Website: <a id="ld-website" href="#" target="_blank" rel="noopener"></a></span>
         <span id="ld-email-wrap" class="hidden">Email: <span id="ld-email"></span></span>
@@ -81,6 +88,7 @@
       </div>
       <p id="ld-notes" class="notes"></p>
       <div id="ld-history"></div>
+      <div id="ld-tx-history"></div>
 
       <div id="outcome-panel" class="outcome hidden">
         <h3>Outcome</h3>
@@ -156,6 +164,14 @@
         <button id="btn-reset-all" class="btn danger sm">Reset whole day (all agents)</button>
       </div>
       <p id="agents-msg" class="ok"></p>
+      <h3>Call summaries</h3>
+      <p class="muted">AI summaries are made only when an API key is connected and the daily limit is above 0. Transcripts are saved either way.</p>
+      <p id="sum-status" class="muted">Checking…</p>
+      <div class="row">
+        <input id="sum-limit" type="number" min="0" step="1" placeholder="Daily limit" style="max-width:160px">
+        <button id="btn-sum-save" class="btn primary sm">Save daily limit</button>
+      </div>
+
       <h3>Add a new agent</h3>
       <p class="muted">Create a login name and password here, then share them with the agent.</p>
       <div class="row">
@@ -220,6 +236,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="config.js"></script>
+<script src="transcript.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

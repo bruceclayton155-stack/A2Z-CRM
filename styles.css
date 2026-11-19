@@ -106,3 +106,17 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
   .clocks{margin-left:0}
   .phone{font-size:1.5rem}
 }
+
+/* live transcript + summary */
+.tx-bar{display:flex;gap:10px;align-items:center;margin:8px 0}
+.tx-live{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;max-height:220px;overflow-y:auto;font-size:.92em;margin:6px 0}
+.tx-line{padding:2px 0}
+.tx-line b{display:inline-block;min-width:76px;font-size:.85em}
+.tx-line.agent b{color:var(--accent)}
+.tx-line.cust b{color:#7dd3fc}
+.tx-summary{background:#0f2e22;border:1px solid var(--accent-d);border-radius:8px;padding:10px 12px;margin:6px 0;font-size:.92em;white-space:normal}
+#ld-tx-history{font-size:.85em;color:var(--muted);margin-top:8px;border-top:1px dashed var(--line);padding-top:8px}
+#ld-tx-history:empty{display:none}
+.tx-past{padding:6px 0}
+.tx-sumtext{color:var(--text);white-space:pre-wrap;margin:2px 0}
+.tx-pre{white-space:pre-wrap;font:inherit;margin:4px 0}
