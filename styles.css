@@ -120,3 +120,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .tx-past{padding:6px 0}
 .tx-sumtext{color:var(--text);white-space:pre-wrap;margin:2px 0}
 .tx-pre{white-space:pre-wrap;font:inherit;margin:4px 0}
+
+.tx-admin-row{border-bottom:1px solid var(--line);padding:8px 0}
+.tx-admin-row summary{cursor:pointer}

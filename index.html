@@ -75,6 +75,7 @@
       </div>
 
       <div class="tx-bar">
+        <select id="tx-src" title="Where the customer's voice comes from" style="width:auto;max-width:260px"></select>
         <button id="btn-tx" class="btn ghost sm">Start live transcript</button>
         <span id="tx-status" class="muted"></span>
       </div>
@@ -124,6 +125,7 @@
       <button data-atab="leads" class="atab">Leads</button>
       <button data-atab="callbacks" class="atab">Callbacks</button>
       <button data-atab="meetings" class="atab">Meetings</button>
+      <button data-atab="transcripts" class="atab">Transcripts</button>
       <button data-atab="backup" class="atab">Backup</button>
     </nav>
     <div class="who"><span id="admin-name"></span><button id="btn-logout2" class="btn ghost sm">Log out</button></div>
@@ -220,6 +222,18 @@
         <tr><th>Date</th><th>Business</th><th>Phone</th><th>City</th><th>Agent</th></tr>
       </thead><tbody></tbody></table>
       <p id="meetings-msg" class="muted"></p>
+    </div>
+
+    <!-- Transcripts -->
+    <div class="apane hidden" id="apane-transcripts">
+      <h2>Call transcripts</h2>
+      <div class="filters">
+        <select id="tx-f-agent"><option value="">All agents</option></select>
+        <input id="tx-f-day" type="date">
+        <button id="btn-tx-filter" class="btn primary sm">Load</button>
+      </div>
+      <div id="tx-admin-list"></div>
+      <p id="tx-admin-msg" class="muted"></p>
     </div>
 
     <!-- Backup -->

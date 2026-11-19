@@ -453,7 +453,7 @@ async function initAdmin() {
     $("admin-tabs").querySelectorAll(".atab").forEach((x) => x.classList.toggle("active", x === b));
     document.querySelectorAll(".apane").forEach((p) => p.classList.add("hidden"));
     $("apane-" + b.dataset.atab).classList.remove("hidden");
-    ({ upload: () => {}, agents: loadAgents, today: loadTodayStats, leads: () => { loadLeadFilters(); loadLeads(); }, callbacks: loadCallbacks, meetings: loadMeetings, backup: () => {} })[b.dataset.atab]?.();
+    ({ upload: () => {}, agents: loadAgents, today: loadTodayStats, leads: () => { loadLeadFilters(); loadLeads(); }, callbacks: loadCallbacks, meetings: loadMeetings, backup: () => {}, transcripts: () => adminTxLoad() })[b.dataset.atab]?.();
   }));
   $("f-status").innerHTML = '<option value="">All statuses</option>' +
     Object.entries(STATUS_LABELS).map(([k, l]) => `<option value="${k}">${l}</option>`).join("");
