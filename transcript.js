@@ -5,7 +5,7 @@
 
 const TX = {
   on: false, recording: false, workers: {}, ready: {}, loadPct: {}, device: "",
-  mic: null, disp: null, taps: [], interim: {}, bag: {}, pend: {}, seq: 0, leadId: null, runId: 0,
+  engine: "", recs: [], draining: false, mic: null, disp: null, taps: [], interim: {}, bag: {}, pend: {}, seq: 0, leadId: null, runId: 0,
 };
 
 /* ---- speech worker (runs inside a Web Worker; written as a function so it is easy to read) ---- */
@@ -66,6 +66,7 @@ function txRenderLive() {
 }
 
 function txLoadStatus() {
+  if (TX.engine === "browser") { txSetStatus("● Transcript on (live)"); return; }
   const bothReady = TX.ready.Agent && TX.ready.Customer;
   if (bothReady) { txSetStatus(`● Transcript on${TX.device === "webgpu" ? " (fast mode)" : ""}`); return; }
   const pct = Math.min(TX.loadPct.Agent || 0, TX.loadPct.Customer || 0);
@@ -114,6 +115,56 @@ function txKillWorkers() {
   TX.workers = {}; TX.ready = {}; TX.loadPct = {};
 }
 
+/* ---- fast engine: Chrome's built-in speech recognition (true live words). Audio goes to Google's speech service. ---- */
+function txPickEngine() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const ver = parseInt(((navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1]) || "0", 10);
+  if (CONFIG.transcribeEngine === "whisper" || !SR || ver < 139) return "whisper";   // start(track) needs Chrome 139+
+  return "browser";
+}
+function txStartRecs() {
+  TX.recs = [
+    { speaker: "Agent", track: TX.mic.getAudioTracks()[0], alive: true, fails: 0, r: null },
+    { speaker: "Customer", track: TX.disp.getAudioTracks()[0], alive: true, fails: 0, r: null },
+  ];
+  TX.recs.forEach(txRecRun);
+}
+function txRecFallback(msg) {
+  if (TX.engine !== "browser") return;
+  TX.recs.forEach((x) => { x.alive = false; try { x.r.abort(); } catch (e) {} }); TX.recs = [];
+  TX.engine = "whisper"; txEnsureWorkers();
+  txSetStatus(msg + " Using offline mode (slower).");
+}
+function txRecRun(rec) {
+  if (!rec.alive) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const r = new SR();
+  r.continuous = true; r.interimResults = true; r.maxAlternatives = 1; r.lang = CONFIG.transcribeLang || "en-US";
+  r.onresult = (e) => {
+    rec.fails = 0;
+    if (!TX.recording && !TX.draining) return;
+    let interim = "";
+    const prev = TX.interim[rec.speaker];
+    const t0 = prev ? prev.t : Date.now();
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const res = e.results[i], text = res[0].transcript.trim();
+      if (res.isFinal) { if (text) txSegs(TX.runId).push({ t: t0, speaker: rec.speaker, text }); TX.interim[rec.speaker] = null; }
+      else interim += text + " ";
+    }
+    if (interim.trim()) TX.interim[rec.speaker] = { t: TX.interim[rec.speaker] ? TX.interim[rec.speaker].t : t0, speaker: rec.speaker, text: interim.trim(), utt: 0 };
+    txRenderLive();
+  };
+  r.onerror = (ev) => {
+    if (["not-allowed", "service-not-allowed", "language-not-supported", "audio-capture"].includes(ev.error) || (ev.error === "network" && ++rec.fails >= 3)) {
+      rec.alive = false; txRecFallback("Live speech service unavailable (" + ev.error + ").");
+    }
+  };
+  r.onend = () => { if (rec.alive) setTimeout(() => txRunSafe(rec), 250); };       // Chrome ends sessions now and then: restart
+  rec.r = r;
+  try { r.start(rec.track); } catch (e) { rec.alive = false; txRecFallback("Live speech could not start."); }
+}
+function txRunSafe(rec) { if (TX.on && rec.alive) txRecRun(rec); }
+
 /* ---- audio taps (one per speaker) ---- */
 function txMakeTap(stream, speaker) {
   const ctx = new AudioContext({ sampleRate: 16000 });
@@ -123,7 +174,7 @@ function txMakeTap(stream, speaker) {
   src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
   const tap = { speaker, ctx, proc, src, buf: [], len: 0, silent: 0, heard: false, utt: 0, interimBusy: false, lastInterim: 0 };
   proc.onaudioprocess = (e) => {
-    if (!TX.recording) { tap.buf = []; tap.len = 0; tap.silent = 0; tap.heard = false; return; }
+    if (!TX.recording || TX.engine === "browser") { tap.buf = []; tap.len = 0; tap.silent = 0; tap.heard = false; return; }
     const d = new Float32Array(e.inputBuffer.getChannelData(0));
     let sum = 0; for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
     const loud = Math.sqrt(sum / d.length) > 0.012;
@@ -216,8 +267,9 @@ async function txStartInner(mode) {
   }
   TX.auto = !!dev;
   TX.disp.getTracks().forEach((t) => t.addEventListener("ended", () => { txStop(false); txAutoRetry(); }));
-  txEnsureWorkers();
   TX.taps = [txMakeTap(TX.mic, "Agent"), txMakeTap(TX.disp, "Customer")];
+  TX.engine = txPickEngine();
+  if (TX.engine === "browser") txStartRecs(); else txEnsureWorkers();
   TX.on = true;
   $("btn-tx").textContent = "Stop live transcript";
   if (!/Entire screen/.test(($("tx-status") || {}).textContent || "")) txLoadStatus();
@@ -228,6 +280,7 @@ function txStop(silent) {
   TX.on = false; TX.recording = false;
   TX.taps.forEach((t) => { try { t.proc.disconnect(); t.src.disconnect(); t.ctx.close(); } catch (e) {} });
   TX.taps = [];
+  TX.recs.forEach((x) => { x.alive = false; try { x.r.abort(); } catch (e) {} }); TX.recs = [];
   [TX.mic, TX.disp].forEach((s) => s && s.getTracks().forEach((t) => t.stop()));
   TX.mic = TX.disp = null;
   const b = $("btn-tx"); if (b) b.textContent = "Start live transcript";
@@ -267,6 +320,10 @@ async function txEndCall() {
   TX.taps.forEach((t) => txFlush(t, true));
   txSetStatus("Finishing transcript…");
   for (let i = 0; i < 240 && (TX.pend[run] || 0) > 0; i++) await new Promise((r) => setTimeout(r, 250));   // wait up to 60 s
+  if (TX.engine === "browser") {                          // let the last words finish, then keep the unfinished sentence
+    TX.draining = true; await new Promise((r) => setTimeout(r, 700)); TX.draining = false;
+    if (run === TX.runId) { Object.values(TX.interim).forEach((i) => { if (i && i.text) txSegs(run).push({ t: i.t, speaker: i.speaker, text: i.text }); }); TX.interim = {}; }
+  }
   const segs = txSegs(run).slice().sort((a, b) => a.t - b.t);
   delete TX.bag[run]; delete TX.pend[run];
   const here = () => run === TX.runId;                    // false once the agent has moved to the next lead

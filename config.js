@@ -9,5 +9,7 @@ const CONFIG = {
   voicemailRetryHours: 24,
   transcribeModel: "Xenova/whisper-tiny.en",   // speech model that runs in the agent's browser (tiny = fastest; "Xenova/whisper-base.en" = more accurate, slower)
   customerDeviceLabel: "CABLE Output",   // optional: part of a virtual-cable name, e.g. "CABLE Output" (skips the share window)
+  transcribeEngine: "browser",   // "browser" = Chrome live speech (fast, audio goes to Google, needs Chrome 139+). "whisper" = offline in your PC (slower)
+  transcribeLang: "en-US",
   transcribeDevice: "auto",                     // "auto" = use the graphics card (fast) when the browser supports it, else CPU. "wasm" = force CPU
 };
