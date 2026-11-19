@@ -689,10 +689,17 @@ async function commitUpload() {
   const agents = await presentAgentsFor(parsedUpload.rows[0].tab);
   if (!agents.length) { $("up-error").textContent = "No present agents for this tab."; $("btn-upload").disabled = false; return; }
   let added = 0, failed = 0;
-  for (let i = 0; i < parsedUpload.rows.length; i += 500) {
-    const chunk = parsedUpload.rows.slice(i, i + 500).map((l, j) => ({
-      ...l, assigned_to: agents[Math.floor((i + j) * agents.length / parsedUpload.rows.length)].id,
-    }));
+  // deal leads out round-robin WITHIN each timezone, so every agent gets the same count
+  // and the same mix of timezones (nobody ends up with only Eastern or only Pacific leads)
+  const byTz = {};
+  parsedUpload.rows.forEach((l) => { (byTz[l.timezone] = byTz[l.timezone] || []).push(l); });
+  const dealt = [];
+  let turn = 0;
+  for (const tz of Object.keys(byTz)) {
+    for (const l of byTz[tz]) { dealt.push({ ...l, assigned_to: agents[turn % agents.length].id }); turn++; }
+  }
+  for (let i = 0; i < dealt.length; i += 500) {
+    const chunk = dealt.slice(i, i + 500);
     const { error } = await sb.from("leads").upsert(chunk, { onConflict: "phone", ignoreDuplicates: true });
     if (error) failed += chunk.length; else added += chunk.length;
   }
