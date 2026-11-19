@@ -123,3 +123,4 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 
 .tx-admin-row{border-bottom:1px solid var(--line);padding:8px 0}
 .tx-admin-row summary{cursor:pointer}
+.tx-line.interim{opacity:.65;font-style:italic}

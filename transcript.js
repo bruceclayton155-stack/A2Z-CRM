@@ -5,7 +5,7 @@
 
 const TX = {
   on: false, recording: false, workers: {}, ready: {}, loadPct: {}, device: "",
-  mic: null, disp: null, taps: [], bag: {}, pend: {}, seq: 0, leadId: null, runId: 0,
+  mic: null, disp: null, taps: [], interim: {}, bag: {}, pend: {}, seq: 0, leadId: null, runId: 0,
 };
 
 /* ---- speech worker (runs inside a Web Worker; written as a function so it is easy to read) ---- */
@@ -36,7 +36,7 @@ function txWorkerBody() {
     if (m.type === "init") chain = chain.then(() => init(m));
     else if (m.type === "audio") chain = chain.then(async () => {
       const text = asr ? await run(m.audio) : "";
-      self.postMessage({ type: "text", id: m.id, speaker: m.speaker, t: m.t, runId: m.runId, text });
+      self.postMessage({ type: "text", id: m.id, speaker: m.speaker, t: m.t, runId: m.runId, interim: !!m.interim, utt: m.utt, text });
     });
   };
 }
@@ -57,9 +57,11 @@ function txRenderLive() {
   const box = $("tx-live");
   if (!box) return;
   const segs = txSegs(TX.runId).slice().sort((a, b) => a.t - b.t);
-  box.innerHTML = segs.length
-    ? segs.map((s) => `<div class="tx-line ${s.speaker === "Agent" ? "agent" : "cust"}"><b>${s.speaker}</b> ${esc(s.text)}</div>`).join("")
-    : '<div class="muted">Listening… text appears a moment after each sentence.</div>';
+  const live = Object.values(TX.interim).filter(Boolean).sort((a, b) => a.t - b.t);
+  const line = (s, cls) => `<div class="tx-line ${s.speaker === "Agent" ? "agent" : "cust"}${cls}"><b>${s.speaker}</b> ${esc(s.text)}</div>`;
+  box.innerHTML = (segs.length || live.length)
+    ? segs.map((s) => line(s, "")).join("") + live.map((s) => line(s, " interim")).join("")
+    : '<div class="muted">Listening… words appear as they are spoken.</div>';
   box.scrollTop = box.scrollHeight;
 }
 
@@ -78,12 +80,25 @@ function txSpawn(sp, device) {
     const m = e.data;
     if (m.type === "progress") { TX.loadPct[sp] = m.pct; if (TX.on && !(TX.ready.Agent && TX.ready.Customer)) txLoadStatus(); }
     else if (m.type === "ready") { TX.ready[sp] = true; TX.device = m.device; if (TX.on) txLoadStatus(); }
-    else if (m.type === "fallback") { try { w.terminate(); } catch (x) {} txSpawn(sp, "wasm"); }   // graphics card failed: use CPU
+    else if (m.type === "fallback") { try { w.terminate(); } catch (x) {} TX.taps.forEach((t) => { t.interimBusy = false; }); txSpawn(sp, "wasm"); }   // graphics card failed: use CPU
     else if (m.type === "error") { txSetStatus("Speech model failed: " + m.message); txStop(true); txKillWorkers(); }
     else if (m.type === "text") {
+      const tap = TX.taps.find((t) => t.speaker === m.speaker);
+      if (m.interim) {                                   // live partial text while the person is still talking
+        if (tap) tap.interimBusy = false;
+        if (tap && TX.recording && m.runId === TX.runId && m.utt === tap.utt) {
+          const text = txClean(m.text);
+          TX.interim[m.speaker] = text ? { t: m.t, speaker: m.speaker, text, utt: m.utt } : null;
+          txRenderLive();
+        }
+        return;
+      }
       TX.pend[m.runId] = Math.max(0, (TX.pend[m.runId] || 0) - 1);
       const text = txClean(m.text);
-      if (text) { txSegs(m.runId).push({ t: m.t, speaker: m.speaker, text }); if (m.runId === TX.runId) txRenderLive(); }
+      if (text) txSegs(m.runId).push({ t: m.t, speaker: m.speaker, text });
+      const cur = TX.interim[m.speaker];
+      if (cur && cur.utt === m.utt) TX.interim[m.speaker] = null;     // the final text replaces the live text
+      if (m.runId === TX.runId) txRenderLive();
     }
   };
   w.onerror = () => { txSetStatus("Speech engine could not start in this browser."); txStop(true); txKillWorkers(); };
@@ -106,7 +121,7 @@ function txMakeTap(stream, speaker) {
   const proc = ctx.createScriptProcessor(2048, 1, 1);
   const mute = ctx.createGain(); mute.gain.value = 0;
   src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
-  const tap = { speaker, ctx, proc, src, buf: [], len: 0, silent: 0, heard: false };
+  const tap = { speaker, ctx, proc, src, buf: [], len: 0, silent: 0, heard: false, utt: 0, interimBusy: false, lastInterim: 0 };
   proc.onaudioprocess = (e) => {
     if (!TX.recording) { tap.buf = []; tap.len = 0; tap.silent = 0; tap.heard = false; return; }
     const d = new Float32Array(e.inputBuffer.getChannelData(0));
@@ -116,62 +131,97 @@ function txMakeTap(stream, speaker) {
     tap.silent = loud ? 0 : tap.silent + d.length;
     if (loud) tap.heard = true;
     if (!tap.heard && tap.len > 16000) { tap.buf = []; tap.len = 0; return; }            // drop long silence
-    // send a chunk after a short pause (0.4 s; 0.8 s if the speech engine is behind) or at 7 s max
-    const pause = txPendingNow() > 2 ? 12800 : 6400;
-    if (tap.heard && ((tap.len >= 14400 && tap.silent >= pause) || tap.len >= 112000)) txFlush(tap, false);
+    // final chunk: after a 0.5 s pause (0.8 s if the engine is behind) or at 8 s max
+    const pause = txPendingNow() > 2 ? 12800 : 8000;
+    if (tap.heard && ((tap.len >= 14400 && tap.silent >= pause) || tap.len >= 128000)) { txFlush(tap, false); return; }
+    // live partial text: re-read what has been said so far about every 1.2 s while the person is talking
+    const now = Date.now();
+    if (tap.heard && tap.len >= 12000 && now - tap.lastInterim >= 1200 && (!tap.interimBusy || now - tap.lastInterim > 10000) && txPendingNow() === 0) txInterim(tap);
   };
   return tap;
 }
+function txInterim(tap) {
+  const w = TX.workers[tap.speaker];
+  if (!w || !TX.ready[tap.speaker]) return;
+  const all = new Float32Array(tap.len);
+  let o = 0; tap.buf.forEach((b) => { all.set(b, o); o += b.length; });
+  tap.interimBusy = true; tap.lastInterim = Date.now();
+  w.postMessage({ type: "audio", interim: true, utt: tap.utt, speaker: tap.speaker, t: Date.now(), runId: TX.runId, audio: all }, [all.buffer]);
+}
 function txFlush(tap, force) {
   if (!tap.len) return;
+  const utt = tap.utt; tap.utt++;
   const heard = tap.heard;
   const all = new Float32Array(tap.len);
   let o = 0; tap.buf.forEach((b) => { all.set(b, o); o += b.length; });
   tap.buf = []; tap.len = 0; tap.silent = 0; tap.heard = false;
-  if (!heard || (!force && all.length < 8000) || all.length < 4000) return;
+  if (!heard || (!force && all.length < 8000) || all.length < 4000) { TX.interim[tap.speaker] = null; return; }
   const w = TX.workers[tap.speaker];
   if (!w) return;
   TX.pend[TX.runId] = (TX.pend[TX.runId] || 0) + 1;
-  w.postMessage({ type: "audio", id: ++TX.seq, speaker: tap.speaker, t: Date.now(), runId: TX.runId, audio: all }, [all.buffer]);
+  w.postMessage({ type: "audio", id: ++TX.seq, utt, speaker: tap.speaker, t: Date.now(), runId: TX.runId, audio: all }, [all.buffer]);
 }
 
 /* ---- start / stop capture (once per shift) ---- */
-async function txStart(auto) {
+/* mode: "load" = page opened (cable only, silent), "call" = first call click (share window if no cable), undefined = button */
+async function txStart(mode) {
+  if (TX.starting) return;
+  TX.starting = true;
+  try { await txStartInner(mode); } finally { TX.starting = false; }
+}
+async function txStartInner(mode) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.Worker) {
     txSetStatus("This browser can't do it. Use Chrome or Edge on Windows."); return;
   }
   const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  const micOpts = { audio: { echoCancellation: true, noiseSuppression: true } };
+  let dev = null;
   try {
-    TX.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     const want = (CONFIG.customerDeviceLabel || "").toLowerCase();      // optional: virtual cable name, skips screen share
-    let dev = null;
-    if (want) dev = (await navigator.mediaDevices.enumerateDevices()).find((d) => d.kind === "audioinput" && d.label.toLowerCase().includes(want));
-    if (auto && !dev) { txStop(true); txSetStatus("Auto transcript: virtual audio device \"" + CONFIG.customerDeviceLabel + "\" not found. Check the cable is installed, then click Start."); return; }
+    if (want) {
+      const find = async () => (await navigator.mediaDevices.enumerateDevices()).find((d) => d.kind === "audioinput" && d.label.toLowerCase().includes(want));
+      dev = await find();
+      if (!dev) {                                                       // device names stay hidden until mic permission is given
+        const all = await navigator.mediaDevices.enumerateDevices();
+        if (all.some((d) => d.kind === "audioinput" && !d.label)) {
+          const t = await navigator.mediaDevices.getUserMedia({ audio: true }); t.getTracks().forEach((x) => x.stop());
+          dev = await find();
+        }
+      }
+    }
+    if (mode === "load" && !dev) {
+      txSetStatus(want ? "Virtual cable not found: the share window will open when you start your first call." : "");
+      return;
+    }
     if (dev) {
+      TX.mic = await navigator.mediaDevices.getUserMedia(micOpts);
       TX.disp = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: dev.deviceId }, ...raw } });
     } else {
       txSetStatus("In the share window pick the call app (or its tab) and tick “Share audio”, then click Share.");
-      TX.disp = await navigator.mediaDevices.getDisplayMedia({
+      TX.disp = await navigator.mediaDevices.getDisplayMedia({      // first: needs the click that started it
         video: { frameRate: 1 }, audio: raw, selfBrowserSurface: "exclude", systemAudio: "include",
       });
       if (!TX.disp.getAudioTracks().length) {
-        txStop(true); txSetStatus("No audio was shared. Click again, choose the call app and tick “Share audio”."); return;
+        txStop(true); txSetStatus("No audio was shared. Click “Start live transcript”, choose the call app and tick “Share audio”."); return;
       }
       const vt = TX.disp.getVideoTracks()[0];
       const surface = vt && vt.getSettings ? vt.getSettings().displaySurface : "";
       if (surface === "monitor") txSetStatus("● Entire screen shared: ALL system sounds will be transcribed. Share only the call app/tab to avoid that.");
+      TX.mic = await navigator.mediaDevices.getUserMedia(micOpts);
     }
   } catch (e) {
-    txStop(true); txSetStatus("Not started: " + (e.name === "NotAllowedError" ? "permission was declined." : e.message)); return;
+    txStop(true);
+    if (e.name === "NotAllowedError") TX.declined = true;              // do not ask again on every call
+    txSetStatus("Not started: " + (e.name === "NotAllowedError" ? "permission was declined or the share window was closed. Click “Start live transcript” to try again." : e.message)); return;
   }
-  TX.auto = !!(auto || CONFIG.customerDeviceLabel);
+  TX.auto = !!dev;
   TX.disp.getTracks().forEach((t) => t.addEventListener("ended", () => { txStop(false); txAutoRetry(); }));
   txEnsureWorkers();
   TX.taps = [txMakeTap(TX.mic, "Agent"), txMakeTap(TX.disp, "Customer")];
   TX.on = true;
   $("btn-tx").textContent = "Stop live transcript";
-  if (!/Entire screen/.test(($("tx-status")||{}).textContent || "")) txLoadStatus();
-  if (callStart && currentLead) txBeginCall(currentLead);     // started mid-call
+  if (!/Entire screen/.test(($("tx-status") || {}).textContent || "")) txLoadStatus();
+  if (callStart && currentLead) txBeginCall(currentLead);     // started by the call click
 }
 function txStop(silent) {
   if (TX.recording) txEndCall();            // flush + save what was said so far
@@ -185,16 +235,17 @@ function txStop(silent) {
 }
 function txAutoRetry() {                      // if the device drops, try to reconnect quietly
   if (!TX.auto || TX.retry) return;
-  TX.retry = setTimeout(() => { TX.retry = null; if (!TX.on) txStart(true); }, 8000);
+  TX.retry = setTimeout(() => { TX.retry = null; if (!TX.on) txStart("load"); }, 8000);
 }
 function txInit() {
-  $("btn-tx").addEventListener("click", () => { TX.auto = false; TX.on ? txStop(false) : txStart(); });
-  if (CONFIG.customerDeviceLabel) txStart(true);      // permanent mode: starts by itself, no share window
+  $("btn-tx").addEventListener("click", () => { TX.auto = false; TX.declined = false; TX.on ? txStop(false) : txStart(); });
+  if (CONFIG.customerDeviceLabel) txStart("load");    // cable installed: starts by itself, no share window
 }
 
 /* ---- per-call hooks (called from app.js) ---- */
 function txBeginCall(lead) {
-  TX.runId++; TX.leadId = lead.id; TX.bag[TX.runId] = []; TX.pend[TX.runId] = 0;
+  if (!TX.on && !TX.starting && !TX.declined) txStart("call");     // first call: start by itself (share window if no cable)
+  TX.runId++; TX.leadId = lead.id; TX.bag[TX.runId] = []; TX.pend[TX.runId] = 0; TX.interim = {};
   $("tx-summary").classList.add("hidden"); $("tx-summary").textContent = "";
   if (!TX.on) { $("tx-live").classList.add("hidden"); return; }
   TX.recording = true;
@@ -203,7 +254,7 @@ function txBeginCall(lead) {
   txRenderLive();
 }
 function txReset() {
-  TX.recording = false; TX.runId++;          // an unfinished save from the previous call keeps running on its own
+  TX.recording = false; TX.runId++; TX.interim = {};          // an unfinished save from the previous call keeps running on its own
   const live = $("tx-live"), sum = $("tx-summary");
   if (live) { live.classList.add("hidden"); live.innerHTML = ""; }
   if (sum) { sum.classList.add("hidden"); sum.textContent = ""; }
