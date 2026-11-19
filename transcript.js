@@ -21,24 +21,15 @@ function txWorkerBody() {
   };
   const init = async (m) => {
     model = m.model;
-    const order = (m.device !== "wasm" && self.navigator && navigator.gpu) ? ["webgpu", "wasm"] : ["wasm"];
-    let err = null;
-    for (const d of order) {
-      try { asr = await load(d); onGpu = d === "webgpu"; self.postMessage({ type: "ready", device: d }); return; }
-      catch (e) { err = e; }
-    }
-    self.postMessage({ type: "error", message: String((err && err.message) || err) });
+    let gpu = false;
+    if (m.device !== "wasm" && self.navigator && navigator.gpu) { try { gpu = !!(await navigator.gpu.requestAdapter()); } catch (e) {} }
+    try { asr = await load(gpu ? "webgpu" : "wasm"); onGpu = gpu; self.postMessage({ type: "ready", device: gpu ? "webgpu" : "wasm" }); }
+    catch (e) { self.postMessage(gpu ? { type: "fallback" } : { type: "error", message: String((e && e.message) || e) }); }
   };
   const run = async (audio) => {
     const opts = /\.en$/.test(model) ? {} : { language: "english", task: "transcribe" };
     try { const o = await asr(audio, opts); return (o && o.text) || ""; }
-    catch (e) {
-      if (onGpu) {                                   // graphics card failed: fall back to CPU and retry once
-        onGpu = false;
-        try { asr = await load("wasm"); const o = await asr(audio, opts); return (o && o.text) || ""; } catch (e2) {}
-      }
-      return "";
-    }
+    catch (e) { if (onGpu) self.postMessage({ type: "fallback" }); return ""; }   // main restarts this engine on CPU
   };
   self.onmessage = (e) => {
     const m = e.data;
@@ -80,26 +71,28 @@ function txLoadStatus() {
 }
 
 /* ---- two workers: one per speaker ---- */
+function txSpawn(sp, device) {
+  const w = new Worker(TX.url, { type: "module" });
+  TX.workers[sp] = w; TX.ready[sp] = false; TX.loadPct[sp] = 0;
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === "progress") { TX.loadPct[sp] = m.pct; if (TX.on && !(TX.ready.Agent && TX.ready.Customer)) txLoadStatus(); }
+    else if (m.type === "ready") { TX.ready[sp] = true; TX.device = m.device; if (TX.on) txLoadStatus(); }
+    else if (m.type === "fallback") { try { w.terminate(); } catch (x) {} txSpawn(sp, "wasm"); }   // graphics card failed: use CPU
+    else if (m.type === "error") { txSetStatus("Speech model failed: " + m.message); txStop(true); txKillWorkers(); }
+    else if (m.type === "text") {
+      TX.pend[m.runId] = Math.max(0, (TX.pend[m.runId] || 0) - 1);
+      const text = txClean(m.text);
+      if (text) { txSegs(m.runId).push({ t: m.t, speaker: m.speaker, text }); if (m.runId === TX.runId) txRenderLive(); }
+    }
+  };
+  w.onerror = () => { txSetStatus("Speech engine could not start in this browser."); txStop(true); txKillWorkers(); };
+  w.postMessage({ type: "init", model: CONFIG.transcribeModel || "Xenova/whisper-tiny.en", device });
+}
 function txEnsureWorkers() {
   if (TX.workers.Agent) return;
-  const url = URL.createObjectURL(new Blob(["(" + txWorkerBody.toString() + ")()"], { type: "text/javascript" }));
-  ["Agent", "Customer"].forEach((sp) => {
-    const w = new Worker(url, { type: "module" });
-    TX.workers[sp] = w; TX.ready[sp] = false; TX.loadPct[sp] = 0;
-    w.onmessage = (e) => {
-      const m = e.data;
-      if (m.type === "progress") { TX.loadPct[sp] = m.pct; if (TX.on && !(TX.ready.Agent && TX.ready.Customer)) txLoadStatus(); }
-      else if (m.type === "ready") { TX.ready[sp] = true; TX.device = m.device; if (TX.on) txLoadStatus(); }
-      else if (m.type === "error") { txSetStatus("Speech model failed: " + m.message); txStop(true); txKillWorkers(); }
-      else if (m.type === "text") {
-        TX.pend[m.runId] = Math.max(0, (TX.pend[m.runId] || 0) - 1);
-        const text = txClean(m.text);
-        if (text) { txSegs(m.runId).push({ t: m.t, speaker: m.speaker, text }); if (m.runId === TX.runId) txRenderLive(); }
-      }
-    };
-    w.onerror = () => { txSetStatus("Speech engine could not start in this browser."); txStop(true); txKillWorkers(); };
-    w.postMessage({ type: "init", model: CONFIG.transcribeModel || "Xenova/whisper-tiny.en", device: CONFIG.transcribeDevice || "auto" });
-  });
+  TX.url = URL.createObjectURL(new Blob(["(" + txWorkerBody.toString() + ")()"], { type: "text/javascript" }));
+  ["Agent", "Customer"].forEach((sp) => txSpawn(sp, CONFIG.transcribeDevice || "auto"));
 }
 function txKillWorkers() {
   Object.values(TX.workers).forEach((w) => { try { w.terminate(); } catch (e) {} });
