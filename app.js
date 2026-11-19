@@ -154,18 +154,35 @@ async function doLogin() {
   const name = $("login-name").value.trim(), pass = $("login-pass").value;
   $("login-error").textContent = "";
   if (!name || !pass) { $("login-error").textContent = "Enter name and password."; return; }
-  const { data, error } = await sb.auth.signInWithPassword({ email: emailFor(name), password: pass });
+  let res;
+  try { res = await sb.auth.signInWithPassword({ email: emailFor(name), password: pass }); }
+  catch (e) { $("login-error").textContent = "Cannot reach the server. Check internet / project status."; return; }
+  const { data, error } = res;
   if (error) { $("login-error").textContent = error.message === "Invalid login credentials" ? "Wrong name or password." : error.message; return; }
   session = data.session;
   await boot();
 }
 async function doSignup() {
   const name = $("login-name").value.trim(), pass = $("signup-pass").value;
+  const code = $("signup-code").value.trim();
   $("login-error").textContent = "";
   if (!name) { $("login-error").textContent = "Enter a name first."; return; }
   if (pass.length < 6) { $("login-error").textContent = "Password must be at least 6 characters."; return; }
-  const { data, error } = await sb.auth.signUp({ email: emailFor(name), password: pass, options: { data: { name } } });
-  if (error) { $("login-error").textContent = error.message; return; }
+  let res;
+  try {
+    res = await sb.auth.signUp({ email: emailFor(name), password: pass, options: { data: { name, signup_code: code } } });
+  } catch (e) {
+    $("login-error").textContent = "Cannot reach the server (" + (e.message || e) + "). Check internet / project status — see troubleshooting.";
+    return;
+  }
+  const { data, error } = res;
+  if (error) {
+    const m = error.message || "";
+    $("login-error").textContent = /Database error|signup code/i.test(m) ? "Wrong or missing signup code (or signups are closed)."
+      : /Failed to fetch|NetworkError/i.test(m) ? "Cannot reach the server. Check internet / project status."
+      : m;
+    return;
+  }
   if (!data.session) { $("login-error").textContent = "Account created but sign-in blocked. Ask admin to disable 'Confirm email' in Supabase Auth settings."; return; }
   session = data.session;
   await boot();
@@ -451,13 +468,24 @@ async function initAdmin() {
   $("btn-del-filtered").addEventListener("click", deleteFiltered);
   $("btn-export-leads").addEventListener("click", () => exportCsv("leads"));
   $("btn-export-calls").addEventListener("click", () => exportCsv("calls"));
+  $("btn-save-code").addEventListener("click", () => saveSignupCode($("signup-code-admin").value.trim()));
+  $("btn-close-signups").addEventListener("click", () => { $("signup-code-admin").value = ""; saveSignupCode(""); });
   loadAgents();
   loadTodayStats();
+}
+async function saveSignupCode(code) {
+  const { error } = await sb.from("app_settings").upsert({ key: "signup_code", value: code });
+  toast("agents-msg", error ? error.message : (code ? "Signup code saved." : "Signups are now closed."));
+}
+async function loadSignupCode() {
+  const { data } = await sb.from("app_settings").select("value").eq("key", "signup_code").maybeSingle();
+  $("signup-code-admin").value = data?.value || "";
 }
 
 /* ---- agents ---- */
 let agentsCache = [];
 async function loadAgents() {
+  loadSignupCode();
   const { data } = await sb.from("profiles").select("*").order("name");
   agentsCache = data || [];
   const tb = $("agents-tbl").querySelector("tbody");

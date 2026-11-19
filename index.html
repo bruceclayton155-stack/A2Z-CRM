@@ -21,7 +21,9 @@
       <button id="btn-login" class="btn primary block">Sign in</button>
       <button id="btn-show-signup" class="btn ghost block">New here? Create an account</button>
       <div id="signup-box" class="hidden">
-        <p class="hint">Account name must be unique. The first account ever created becomes the admin automatically.</p>
+        <p class="hint">Account name must be unique. You need the signup code from your admin. (The very first account ever created becomes the admin and needs no code.)</p>
+        <label>Signup code (from admin)</label>
+        <input id="signup-code" type="text" autocomplete="off" placeholder="ask your admin">
         <label>New password (min 6 characters)</label>
         <input id="signup-pass" type="password" placeholder="choose a password">
         <button id="btn-signup" class="btn primary block">Create account</button>
@@ -159,6 +161,13 @@
         <tr><th>Name</th><th>Admin</th><th>Present</th><th>Website tab</th><th>DM tab</th><th>Active</th><th></th></tr>
       </thead><tbody></tbody></table>
       <p id="agents-msg" class="ok"></p>
+      <h3>New-agent signup code</h3>
+      <p class="muted">New agents need this code to create an account. Leave it empty to close signups completely. Change it after your agents have joined.</p>
+      <div class="row">
+        <input id="signup-code-admin" type="text" autocomplete="off" placeholder="e.g. a2z-7391" style="max-width:260px">
+        <button id="btn-save-code" class="btn primary sm">Save code</button>
+        <button id="btn-close-signups" class="btn danger sm">Close signups</button>
+      </div>
     </div>
 
     <!-- Today -->
