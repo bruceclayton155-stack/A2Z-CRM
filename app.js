@@ -178,7 +178,8 @@ async function doSignup() {
   const { data, error } = res;
   if (error) {
     const m = error.message || "";
-    $("login-error").textContent = /Database error|signup code/i.test(m) ? "Wrong or missing signup code (or signups are closed)."
+    $("login-error").textContent = /signup code/i.test(m) ? "Wrong or missing signup code (or signups are closed)."
+      : /Database error/i.test(m) ? "Signup blocked by the database (" + m + "). Re-run crm-full-setup.sql in Supabase, or check the signup code."
       : /Failed to fetch|NetworkError/i.test(m) ? "Cannot reach the server. Check internet / project status."
       : m;
     return;
