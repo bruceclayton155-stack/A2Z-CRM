@@ -335,6 +335,7 @@ async function txEndCall() {
   const { data, error } = await sb.from("call_transcripts")      // always saved, even if the agent already moved on
     .insert({ lead_id: leadId, agent_id: session.user.id, transcript: text, duration }).select("id").single();
   if (error || !data) { show((el) => { el.textContent = "Transcript captured but could not be saved (" + (error ? error.message : "unknown") + ")."; }); return; }
+  if (here()) { TX.hide = TX.hide || new Set(); TX.hide.add(data.id); }   // current call: hidden from "Past" until its outcome is saved
   show((el) => { el.textContent = "Writing summary…"; });
   const { data: res, error: fErr } = await sb.functions.invoke("summarize", { body: { action: "summarize", transcript_id: data.id } });
   const REASONS = {
@@ -346,7 +347,6 @@ async function txEndCall() {
   if (fErr || !res) show((el) => { el.textContent = "Summary isn't set up yet. The transcript is saved."; });
   else if (res.ok) show((el) => { el.innerHTML = "<b>Call summary</b><br>" + esc(res.summary).replace(/\n/g, "<br>"); });
   else show((el) => { el.textContent = (REASONS[res.reason] || res.message || "Summary unavailable. The transcript is saved.") + (res.reason === "api_error" && res.message ? " [" + res.message + "]" : ""); });
-  if (here() && currentLead && currentLead.id === leadId) txRenderPast(leadId);
 }
 
 /* ---- past summaries on a lead ---- */
@@ -354,10 +354,12 @@ async function txRenderPast(leadId) {
   const box = $("ld-tx-history");
   if (!box) return;
   box.innerHTML = "";
-  const { data } = await sb.from("call_transcripts").select("transcript,summary,created_at")
-    .eq("lead_id", leadId).order("created_at", { ascending: false }).limit(3);
-  if (!data || !data.length || !currentLead || currentLead.id !== leadId) return;
-  box.innerHTML = "<b>Past call transcripts:</b>" + data.map((r) =>
+  const { data } = await sb.from("call_transcripts").select("id,transcript,summary,created_at")
+    .eq("lead_id", leadId).order("created_at", { ascending: false }).limit(8);
+  if (!currentLead || currentLead.id !== leadId) return;
+  const rows = (data || []).filter((r) => !(TX.hide && TX.hide.has(r.id))).slice(0, 3);   // not the call still waiting for its outcome
+  if (!rows.length) return;
+  box.innerHTML = "<b>Past call transcripts:</b>" + rows.map((r) =>
     `<div class="tx-past"><div>${new Date(r.created_at).toLocaleString()}</div>` +
     (r.summary ? `<div class="tx-sumtext">${esc(r.summary)}</div>` : "") +
     `<details><summary>Transcript</summary><pre class="tx-pre">${esc(r.transcript)}</pre></details></div>`).join("");

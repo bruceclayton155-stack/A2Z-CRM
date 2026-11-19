@@ -393,6 +393,7 @@ async function saveOutcome() {
   pendingOutcome = null;
   $("call-note").value = ""; $("cb-datetime").value = "";
   $("outcome-btns").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+  if (typeof TX !== "undefined" && TX.hide) TX.hide.clear();   // outcome saved: this call may now appear in "Past" on later visits
   loadNextLead();
   loadAgentToday();
 }
