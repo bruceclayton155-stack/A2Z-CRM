@@ -563,11 +563,114 @@ async function resetLeads(agentId) {
   const { count, error } = await q;
   toast("agents-msg", error ? error.message : `Reset ${count || 0} lead(s) for ${who}.`);
 }
+/* ---- upload: read Excel, build preview ---- */
+const UP_COLS = {
+  business_name: ["businessname", "business", "name", "companyname", "company", "title"],
+  phone: ["phone", "phonenumber", "phonenumbers", "mobile", "tel", "telephone", "contact", "contactnumber"],
+  city: ["city", "town", "location"],
+  niche: ["niche", "category", "industry", "type", "businesstype"],
+  rating: ["rating", "stars", "googlerating"],
+  reviews: ["reviews", "reviewcount", "numberofreviews", "totalreviews"],
+  website: ["website", "site", "url", "web", "websiteurl"],
+  email: ["email", "emailaddress", "mail"],
+  meta_ads: ["metaads", "runningmetaads", "metaadsrunning", "facebookads", "fbads", "runningads", "ads"],
+  notes: ["notes", "note", "comments", "comment", "remarks"],
+};
+function upNorm(s) { return String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function upPhone(raw) {
+  let d = String(raw ?? "").replace(/\D/g, "");
+  if (d.length === 11 && d[0] === "1") d = d.slice(1);
+  if (d.length !== 10) return null;
+  return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+function upSheetTab(name) {
+  if (/website/i.test(name)) return "website";
+  if (/digital|marketing|\bdm\b/i.test(name)) return "dm";
+  return null;
+}
+async function parseUploadFile(ev) {
+  const file = $("up-file").files[0];
+  const prev = $("up-preview");
+  $("up-error").textContent = ""; $("up-done").textContent = "";
+  parsedUpload = null;
+  if (!file) { prev.classList.add("hidden"); return; }
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const sheets = wb.SheetNames.filter((n) => !/google\s*ads/i.test(n));   // ignore "Running Google Ads"
+    // when a new file is picked, auto-select the tab if the sheet names make it obvious
+    if (ev && ev.target && ev.target.id === "up-file") {
+      const kinds = [...new Set(sheets.map(upSheetTab).filter(Boolean))];
+      if (kinds.length === 1) $("up-tab").value = kinds[0];
+    }
+    const tab = $("up-tab").value;
+    // use sheets whose name matches the chosen tab; if none are recognisable, use all remaining sheets
+    const named = sheets.filter((n) => upSheetTab(n) === tab);
+    const use = named.length ? named : sheets.filter((n) => !upSheetTab(n));
+    const rows = [], seen = new Set();
+    let total = 0, noPhone = 0, dupes = 0;
+    for (const sn of use) {
+      const raw = XLSX.utils.sheet_to_json(wb.Sheets[sn], { defval: "", raw: false });
+      if (!raw.length) continue;
+      const map = {};
+      Object.keys(raw[0]).forEach((h) => {
+        const nh = upNorm(h);
+        for (const [field, aliases] of Object.entries(UP_COLS)) {
+          if (!map[field] && aliases.includes(nh)) { map[field] = h; break; }
+        }
+      });
+      if (!map.phone || !map.business_name) continue;
+      for (const r of raw) {
+        const name = String(r[map.business_name] ?? "").trim();
+        const rawPhone = r[map.phone];
+        if (!name && !String(rawPhone).trim()) continue;      // blank row
+        total++;
+        const phone = upPhone(rawPhone);
+        if (!phone || !name) { noPhone++; continue; }
+        if (seen.has(phone)) { dupes++; continue; }
+        seen.add(phone);
+        const city = String(r[map.city] ?? "").trim() || null;
+        const num = (v) => { const n = parseFloat(String(v ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) ? n : null; };
+        rows.push({
+          tab, business_name: name, phone, city,
+          niche: String(r[map.niche] ?? "").trim() || null,
+          rating: num(r[map.rating]),
+          reviews: (() => { const n = num(r[map.reviews]); return n === null ? null : Math.round(n); })(),
+          website: String(r[map.website] ?? "").trim() || null,
+          email: String(r[map.email] ?? "").trim() || null,
+          meta_ads: String(r[map.meta_ads] ?? "").trim() || null,
+          notes: String(r[map.notes] ?? "").trim() || null,
+          timezone: tzFor(phone, city),
+        });
+      }
+    }
+    if (!rows.length) {
+      prev.classList.add("hidden");
+      $("up-error").textContent = "No usable rows found. The sheet needs at least a business-name column and a phone column in the first row.";
+      return;
+    }
+    parsedUpload = { filename: file.name, rows };
+    const agents = await presentAgentsFor(tab);
+    $("up-agents").textContent = agents.length ? agents.map((a) => a.name).join(", ") : "(no present agents for this tab!)";
+    $("up-stats").innerHTML = [
+      ["Sheets used", use.join(", ") || "—"],
+      ["Rows read", total],
+      ["Ready to upload", rows.length],
+      ["Skipped: bad/missing phone or name", noPhone],
+      ["Skipped: duplicate in file", dupes],
+    ].map(([k, v]) => `<li><span>${esc(k)}</span><b>${esc(v)}</b></li>`).join("");
+    $("btn-upload").disabled = false;
+    prev.classList.remove("hidden");
+  } catch (e) {
+    prev.classList.add("hidden");
+    $("up-error").textContent = "Could not read the file: " + e.message;
+  }
+}
+
 async function commitUpload() {
   if (!parsedUpload) return;
   $("btn-upload").disabled = true;
   const agents = await presentAgentsFor(parsedUpload.rows[0].tab);
-  if (!agents.length) { $("up-error").textContent = "No present agents for this tab."; return; }
+  if (!agents.length) { $("up-error").textContent = "No present agents for this tab."; $("btn-upload").disabled = false; return; }
   let added = 0, failed = 0;
   for (let i = 0; i < parsedUpload.rows.length; i += 500) {
     const chunk = parsedUpload.rows.slice(i, i + 500).map((l, j) => ({
