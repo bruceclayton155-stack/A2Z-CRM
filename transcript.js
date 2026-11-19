@@ -345,7 +345,7 @@ async function txEndCall() {
   };
   if (fErr || !res) show((el) => { el.textContent = "Summary isn't set up yet. The transcript is saved."; });
   else if (res.ok) show((el) => { el.innerHTML = "<b>Call summary</b><br>" + esc(res.summary).replace(/\n/g, "<br>"); });
-  else show((el) => { el.textContent = REASONS[res.reason] || res.message || "Summary unavailable. The transcript is saved."; });
+  else show((el) => { el.textContent = (REASONS[res.reason] || res.message || "Summary unavailable. The transcript is saved.") + (res.reason === "api_error" && res.message ? " [" + res.message + "]" : ""); });
   if (here() && currentLead && currentLead.id === leadId) txRenderPast(leadId);
 }
 
