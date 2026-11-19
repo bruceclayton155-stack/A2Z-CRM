@@ -269,7 +269,6 @@ function renderLead(lead, isCallback) {
   $("ld-rating").textContent = lead.rating ? `★ ${lead.rating} (${lead.reviews || 0})` : "no rating";
   $("ld-meta").textContent = lead.tab === "dm" ? `Meta ads: ${lead.meta_ads || "?"}` : (lead.tab === "website" ? "Website lead" : "");
   $("ld-phone").textContent = lead.phone;
-  $("ld-phone").href = "tel:" + lead.phone.replace(/[^+\d]/g, "");
   const web = $("ld-website-wrap"), em = $("ld-email-wrap");
   if (lead.website) { web.classList.remove("hidden"); $("ld-website").textContent = lead.website; $("ld-website").href = lead.website.startsWith("http") ? lead.website : "https://" + lead.website; }
   else web.classList.add("hidden");
