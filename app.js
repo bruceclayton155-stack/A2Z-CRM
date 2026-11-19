@@ -475,9 +475,11 @@ async function loadAgents() {
   const tb = $("agents-tbl").querySelector("tbody");
   tb.innerHTML = agentsCache.map((a) => `<tr data-id="${a.id}">
     <td><b>${esc(a.name)}</b></td>
-    ${["is_admin", "is_present", "can_website", "can_dm", "active"].map((f) =>
-      `<td><input type="checkbox" data-field="${f}" ${a[f] ? "checked" : ""}></td>`).join("")}
-    <td><button class="btn sm" data-redistrib="${a.id}">Redistribute open leads</button> <button class="btn sm danger" data-reset="${a.id}">Reset leads</button></td>
+    ${a.is_admin
+      ? `<td colspan="5" class="muted">Admin account — always active, takes no leads</td><td></td>`
+      : ["is_admin", "is_present", "can_website", "can_dm", "active"].map((f) =>
+        `<td><input type="checkbox" data-field="${f}" ${a[f] ? "checked" : ""}></td>`).join("") +
+        `<td><button class="btn sm" data-redistrib="${a.id}">Redistribute open leads</button> <button class="btn sm danger" data-reset="${a.id}">Reset leads</button></td>`}
   </tr>`).join("");
   tb.querySelectorAll("input[type=checkbox]").forEach((c) => c.addEventListener("change", async () => {
     const id = c.closest("tr").dataset.id;
